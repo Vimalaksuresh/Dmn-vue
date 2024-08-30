@@ -1,11 +1,10 @@
-<!-- src/components/DMNViewer.vue -->
 <template>
   <div class="dmn-container">
     <!-- Toolbar for actions -->
     <button @click="createOrLoadDiagram" class="create-diagram-btn">Create New Diagram</button>
-    <button @click="saveDiagram" class="save-diagram-btn">Save Diagram</button>
-    <input type="file" @change="openDiagram" class="choose-file-btn" accept=".dmn, .xml" />
-    
+    <button @click="saveDiagramAsJSON" class="save-diagram-btn">Save Diagram as JSON</button>
+    <input type="file" @change="openDiagram" class="choose-file-btn" accept=".dmn, .xml, .json" />
+
     <!-- DMN Diagram Editor Container -->
     <div ref="dmnContainer" class="dmn-diagram"></div>
   </div>
@@ -45,6 +44,7 @@ export default {
         container: this.$refs.dmnContainer,
         keyboard: { bindTo: window }, // Allows keyboard shortcuts
       });
+      this.dmnModeler.get('canvas').zoom('fit-viewport');
     },
     createOrLoadDiagram() {
       if (!this.diagramLoaded) {
@@ -116,22 +116,22 @@ export default {
         }
       });
     },
-    saveDiagram() {
-      // Save the current diagram
+    saveDiagramAsJSON() {
+      // Save the current diagram as JSON
       this.dmnModeler.saveXML({ format: true }, (err, xml) => {
         if (err) {
           console.error('Failed to save DMN diagram', err);
           alert('Failed to save DMN diagram: ' + err.message);
         } else {
-          // Create a blob and trigger a download
-          const blob = new Blob([xml], { type: 'application/xml' });
+          const json = this.xmlToJson(xml);
+          const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = 'diagram.dmn';
+          a.download = 'diagram.json';
           a.click();
           URL.revokeObjectURL(url); // Release the URL after downloading
-          console.log('DMN diagram saved successfully');
+          console.log('DMN diagram saved as JSON successfully');
         }
       });
     },
@@ -141,63 +141,162 @@ export default {
 
       const reader = new FileReader();
       reader.onload = (e) => {
-        const xml = e.target.result;
-
-        this.dmnModeler.importXML(xml, (err) => {
-          if (err) {
-            console.error('Failed to import DMN XML', err);
-            alert('Failed to import DMN file: ' + err.message);
-          } else {
-            console.log('DMN file imported successfully');
-            this.diagramLoaded = true; // Mark diagram as loaded after import
-          }
-        });
+        const content = e.target.result;
+        if (file.type === 'application/json') {
+          // Load JSON and convert to XML
+          const json = JSON.parse(content);
+          const xml = this.jsonToXml(json);
+          this.loadDiagramXML(xml);
+        } else {
+          // Load DMN XML directly
+          this.loadDiagramXML(content);
+        }
       };
       reader.readAsText(file); // Read the file as text
     },
-  },
+    loadDiagramXML(xml) {
+      this.dmnModeler.importXML(xml, (err) => {
+        if (err) {
+          console.error('Failed to import DMN XML', err);
+          alert('Failed to import DMN file: ' + err.message);
+        } else {
+          console.log('DMN file imported successfully');
+          this.diagramLoaded = true; // Mark diagram as loaded after import
+        }
+      });
+    },
+    xmlToJson(xml) {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xml, 'text/xml');
+      const obj = {};
+
+      function traverse(node, obj) {
+        if (node.nodeType === 3) {
+          obj['#text'] = node.nodeValue.trim();
+          return;
+        }
+
+        obj['name'] = node.nodeName;
+        if (node.attributes) {
+          obj['attributes'] = {};
+          for (let i = 0; i < node.attributes.length; i++) {
+            obj['attributes'][node.attributes[i].nodeName] = node.attributes[i].nodeValue;
+          }
+        }
+        if (node.childNodes && node.childNodes.length) {
+          obj['children'] = [];
+          for (let i = 0; i < node.childNodes.length; i++) {
+            const child = {};
+            traverse(node.childNodes[i], child);
+            obj['children'].push(child);
+          }
+        }
+      }
+
+      traverse(xmlDoc.documentElement, obj);
+      return obj;
+    },
+    jsonToXml(json) {
+      const buildXml = (obj) => {
+        let xml = '';
+
+        if (obj.name) {
+          xml += `<${obj.name}`;
+          if (obj.attributes) {
+            for (const [key, value] of Object.entries(obj.attributes)) {
+              xml += ` ${key}="${value}"`;
+            }
+          }
+          xml += '>';
+        }
+
+        if (obj['#text']) {
+          xml += obj['#text'];
+        }
+
+        if (obj.children) {
+          obj.children.forEach(child => {
+            xml += buildXml(child);
+          });
+        }
+
+        if (obj.name) {
+          xml += `</${obj.name}>`;
+        }
+
+        return xml;
+      };
+
+      return `<?xml version="1.0" encoding="UTF-8"?>${buildXml(json)}`;
+    }
+  }
 };
 </script>
 
 <style>
+
+ 
+
+/* Container for the entire DMN viewer */
 .dmn-container {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  padding: 20px;
+  background-color: #f8f9fa; /* Light gray background */
+  border-radius: 8px; /* Rounded corners */
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Subtle shadow for depth */
 }
 
-.dmn-diagram {
+/* Toolbar styling */
+.dmn-toolbar {
+  display: flex;
+  gap: 10px;
   width: 100%;
-  height: 600px; /* Adjust height as needed */
-  border: 1px solid #ccc;
-  margin-top: 10px;
+  max-width: 1200px; /* Limiting max width */
+  background: #ffffff; /* White background for toolbar */
+  padding: 10px;
+  border-radius: 8px; /* Rounded corners for toolbar */
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Shadow for separation */
 }
 
+/* Individual buttons in the toolbar */
 .create-diagram-btn,
 .save-diagram-btn,
 .choose-file-btn {
-  padding: 8px 16px;
-  margin: 10px;
-  background-color: #007bff;
-  color: white;
+  background-color: #007bff; /* Primary button color */
+  color: #ffffff; /* Button text color */
   border: none;
+  border-radius: 4px; /* Rounded button corners */
+  padding: 10px 20px;
+  font-size: 14px;
   cursor: pointer;
+  transition: background-color 0.3s, transform 0.3s;
 }
 
 .create-diagram-btn:hover,
-.save-diagram-btn:hover {
-  background-color: #0056b3;
-}
-
-.choose-file-btn {
-  background-color: #28a745;
-}
-
+.save-diagram-btn:hover,
 .choose-file-btn:hover {
-  background-color: #218838;
+  background-color: #0056b3; /* Darker shade on hover */
+  transform: scale(1.05); /* Slightly enlarge button on hover */
 }
-.dmn-drd-container{
-height :100%;
+
+.create-diagram-btn:focus,
+.save-diagram-btn:focus,
+.choose-file-btn:focus {
+  outline: none; /* Remove default focus outline */
+  box-shadow: 0 0 0 2px rgba(0,123,255,0.5); /* Custom focus outline */
+}
+
+/* Styling for the diagram container */
+.dmn-diagram {
+  width: 100%;
+  height: 100vh; /* Full viewport height */
+  max-height: 1000px; /* Maximum height */
+  border: 1px solid #dcdcdc; /* Light gray border */
+  border-radius: 8px; /* Rounded corners for the diagram container */
+  background-color: #ffffff; /* White background for diagram */
+  overflow: hidden; /* Hide overflow to maintain clean appearance */
 }
 </style>
